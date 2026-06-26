@@ -1,0 +1,67 @@
+zerops:
+  # Two setups, one trade-off: `dev` is a remote-development
+  # workspace the porter SSHs into to run `mix run --no-halt` by
+  # hand; `prod` builds an OTP release and runs it standalone.
+  - setup: dev
+    build:
+      base: elixir@1.16
+      buildCommands:
+        # A fresh elixir@1.16 image has neither Hex nor rebar3 —
+        # both install before `mix deps.get` can resolve Plug and
+        # Bandit from Hex.
+        - mix local.hex --force
+        - mix local.rebar --force
+        - mix deps.get
+      # Whole-source deploy — the porter edits and runs code from
+      # this tree over SSH, so it needs the full repo.
+      deployFiles:
+        - .
+    run:
+      base: elixir@1.16
+      ports:
+        # `8080` matches the fallback in `System.get_env("PORT",
+        # "8080")` (lib/app/application.ex) — feel free to pick a
+        # different port, as long as the code's fallback agrees.
+        - port: 8080
+          httpSupport: true
+      # `zsc noop --silent` keeps the container idle — the
+      # porter starts `mix run --no-halt` over SSH, and source
+      # edits take effect without a redeploy. No readinessCheck
+      # or healthCheck either — both would restart mid-edit.
+      start: zsc noop --silent
+  - setup: prod
+    build:
+      base: elixir@1.16
+      buildCommands:
+        # Same Hex/rebar3 bootstrap, then a prod-only dependency
+        # fetch and an OTP release build — the release bundles
+        # the BEAM runtime with the app, so the runtime needs no
+        # Elixir/Mix toolchain at all.
+        - mix local.hex --force
+        - mix local.rebar --force
+        - mix deps.get --only prod
+        - MIX_ENV=prod mix compile
+        - MIX_ENV=prod mix release app
+      # `~` strips the `_build/prod/rel/app/` prefix so only the
+      # release ships — `bin/app`, run below via `start`, lands
+      # at the deploy root.
+      deployFiles:
+        - _build/prod/rel/app/~
+    deploy:
+      readinessCheck:
+        # Gates traffic cutover — a new container takes over only
+        # once `/health` answers, so a broken release never
+        # replaces the previous version.
+        httpGet: { port: 8080, path: /health }
+    run:
+      base: elixir@1.16
+      ports:
+        - port: 8080
+          httpSupport: true
+      start: bin/app start
+      # Same `/health` path as readiness, polled continuously
+      # instead of once — an unhealthy container is pulled from
+      # the load balancer and restarted, then reconnected on
+      # recovery.
+      healthCheck:
+        httpGet: { port: 8080, path: /health }
