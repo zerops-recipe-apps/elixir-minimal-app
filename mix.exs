@@ -29,8 +29,8 @@ defmodule App.MixProject do
 
   defp deps do
     [
-      {:plug, "~> 1.16"},
-      {:bandit, "~> 1.5"}
+      {:plug, "~> 1.20.3"},
+      {:bandit, "~> 1.12.4"}
     ]
   end
 end
